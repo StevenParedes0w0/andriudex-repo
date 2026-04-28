@@ -1,8 +1,7 @@
 import os
 from flask import Flask, jsonify
 from mssql_python import connect
-import smtplib
-from email.message import EmailMessage
+import resend
 from flask import request, jsonify
 from twilio.rest import Client
 
@@ -147,19 +146,19 @@ def validar_token(request):
 
 
 def enviar_correo_alerta(asunto, mensaje, destino):
-    mail_user = os.environ.get("MAIL_USER")
-    mail_password = os.environ.get("MAIL_PASSWORD")
-    mail_from = os.environ.get("MAIL_FROM", mail_user)
+    api_key = os.environ.get("RESEND_API_KEY")
+    mail_from = os.environ.get("MAIL_FROM", "onboarding@resend.dev")
 
-    correo = EmailMessage()
-    correo["From"] = mail_from
-    correo["To"] = destino
-    correo["Subject"] = asunto
-    correo.set_content(mensaje)
+    if not api_key:
+        raise ValueError("Falta RESEND_API_KEY")
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(mail_user, mail_password)
-        smtp.send_message(correo)
+    resend.api_key = api_key
+    resend.Emails.send({
+        "from": mail_from,
+        "to": [destino],
+        "subject": asunto,
+        "text": mensaje
+    })
 
 
 def enviar_whatsapp_alerta(mensaje):
