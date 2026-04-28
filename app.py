@@ -2,6 +2,7 @@ import os
 from flask import Flask, jsonify
 from mssql_python import connect
 import resend
+import threading
 from flask import request, jsonify
 from twilio.rest import Client
 
@@ -145,7 +146,7 @@ def validar_token(request):
     return True
 
 
-def enviar_correo_alerta(asunto, mensaje, destino):
+def enviar_correo_alerta(asunto, mensaje, destino, html=None):
     api_key = os.environ.get("RESEND_API_KEY")
     mail_from = os.environ.get("MAIL_FROM", "onboarding@resend.dev")
 
@@ -153,12 +154,24 @@ def enviar_correo_alerta(asunto, mensaje, destino):
         raise ValueError("Falta RESEND_API_KEY")
 
     resend.api_key = api_key
-    resend.Emails.send({
+    payload = {
         "from": mail_from,
         "to": [destino],
         "subject": asunto,
         "text": mensaje
-    })
+    }
+
+    if html:
+        payload["html"] = html
+
+    resend.Emails.send(payload)
+
+
+def enviar_correo_async(asunto, mensaje, destino, html=None):
+    try:
+        enviar_correo_alerta(asunto, mensaje, destino, html=html)
+    except Exception:
+        app.logger.exception("Fallo al enviar correo con Resend")
 
 
 def enviar_whatsapp_alerta(mensaje):
@@ -201,6 +214,7 @@ def enviar_alerta():
         destino = data.get("to")
         asunto = data.get("subject")
         mensaje = data.get("message")
+        html = data.get("html")
 
         if not destino or not asunto or not mensaje:
             return jsonify({
@@ -208,11 +222,15 @@ def enviar_alerta():
                 "message": "Faltan datos"
             }), 400
 
-        enviar_correo_alerta(asunto, mensaje, destino)
+        threading.Thread(
+            target=enviar_correo_async,
+            args=(asunto, mensaje, destino, html),
+            daemon=True
+        ).start()
 
         return jsonify({
             "success": True,
-            "message": "Correo enviado correctamente"
+            "message": "Correo encolado para envio"
         })
 
     except Exception as e:
