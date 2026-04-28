@@ -1,6 +1,10 @@
 import os
 from flask import Flask, jsonify
 from mssql_python import connect
+import smtplib
+from email.message import EmailMessage
+from flask import request, jsonify
+from twilio.rest import Client
 
 app = Flask(__name__)
 
@@ -44,6 +48,12 @@ def home():
 
 @app.route("/debug-env")
 def debug_env():
+    if not validar_token(request):
+        return jsonify({
+            "success": False,
+            "message": "Token inválido o no enviado"
+        }), 401
+
     return jsonify({
         "DB_SERVER": os.getenv("DB_SERVER"),
         "DB_DATABASE": os.getenv("DB_DATABASE"),
@@ -121,6 +131,96 @@ def listar_productos():
         if conn:
             conn.close()
 
+
+def validar_token(request):
+    auth_header = request.headers.get("Authorization")
+
+    if not auth_header:
+        return False
+
+    token_esperado = os.environ.get("API_TOKEN")
+
+    if auth_header != f"Bearer {token_esperado}":
+        return False
+
+    return True
+
+
+def enviar_correo_alerta(asunto, mensaje, destino):
+    mail_user = os.environ.get("MAIL_USER")
+    mail_password = os.environ.get("MAIL_PASSWORD")
+    mail_from = os.environ.get("MAIL_FROM", mail_user)
+
+    correo = EmailMessage()
+    correo["From"] = mail_from
+    correo["To"] = destino
+    correo["Subject"] = asunto
+    correo.set_content(mensaje)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(mail_user, mail_password)
+        smtp.send_message(correo)
+
+
+def enviar_whatsapp_alerta(mensaje):
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+    whatsapp_from = os.environ.get("TWILIO_WHATSAPP_FROM")
+    whatsapp_to = os.environ.get("TWILIO_WHATSAPP_TO")
+
+    if not account_sid or not auth_token or not whatsapp_from or not whatsapp_to:
+        return False
+
+    client = Client(account_sid, auth_token)
+
+    client.messages.create(
+        from_=whatsapp_from,
+        body=mensaje,
+        to=whatsapp_to
+    )
+
+    return True
+    
+
+@app.route("/enviar-alerta", methods=["POST"])
+def enviar_alerta():
+    try:
+        if not validar_token(request):
+            return jsonify({
+                "success": False,
+                "message": "Token inválido o no enviado"
+            }), 401
+
+        data = request.get_json(silent=True)
+
+        if not data:
+            return jsonify({
+                "success": False,
+                "message": "JSON inválido o vacío"
+            }), 400
+
+        destino = data.get("to")
+        asunto = data.get("subject")
+        mensaje = data.get("message")
+
+        if not destino or not asunto or not mensaje:
+            return jsonify({
+                "success": False,
+                "message": "Faltan datos"
+            }), 400
+
+        enviar_correo_alerta(asunto, mensaje, destino)
+
+        return jsonify({
+            "success": True,
+            "message": "Correo enviado correctamente"
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
